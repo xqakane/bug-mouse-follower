@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Lizard/Bug Follower</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html,body{height:100%;margin:0}
+    body{background:#0b0f14;overflow:hidden}
+    canvas{display:block}
+    /* İstersen FPS/parametreleri görmek için toggle */
+    #hud{position:fixed;left:10px;top:10px;font:12px/1.2 system-ui;color:#9ecbff;opacity:.75}
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud"></div>
+
+<script>
+(() => {
+  // ==== PARAMETRELER ====
+  const CFG = {
+    nodes: 46,         // omurga segment sayısı
+    baseStep: 14,      // segmentler arası hedef mesafe
+    headFollow: 8,     // başın mouse'a yaklaşma hızı (px/frame)
+    stiffness: 0.88,   // zincir sertliği (0-1). 1 -> daha sert
+    legEvery: 3,       // her kaç segmentte bir bacak çizilsin
+    legLen: 18,        // bacak uzunluğu
+    legWiggleAmp: 6,   // bacak salınım genliği
+    legWiggleFreq: 0.19, // bacak salınım frekansı
+    spineWidth: 2,     // omurga kalınlığı
+    bodyRibEvery: 2,   // gövde kaburgası gibi çizgiler aralığı
+    bodyRibLen: 10,    // kaburga uzunluğu
+    color: "#e9eef7",  // ana renk
+    fadeTrail: 0.08,   // arkada iz (0 kapatır, 1 tamamen siler)
+  };
+
+  // ==== KANVAS ====
+  const cv = document.getElementById("c");
+  const cx = cv.getContext("2d");
+  function fit(){
+    cv.width = innerWidth;
+    cv.height = innerHeight;
+  }
+  addEventListener("resize", fit); fit();
+
+  // ==== DURUMLAR ====
+  const mouse = { x: cv.width/2, y: cv.height/2 };
+  addEventListener("mousemove", e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+  addEventListener("touchmove", e => {
+    const t = e.touches[0]; if(!t) return;
+    mouse.x = t.clientX; mouse.y = t.clientY;
+  }, {passive:true});
+
+  // Omurga noktaları (zincir)
+  const nodes = [];
+  for (let i=0;i<CFG.nodes;i++){
+    nodes.push({
+      x: cv.width/2 - i*CFG.baseStep,
+      y: cv.height/2,
+      size: CFG.baseStep
+    });
+  }
+
+  // Baş pozisyonu (mouse'a easing ile gider)
+  let head = { x: nodes[0].x, y: nodes[0].y };
+
+  // küçük yardımcılar
+  const lerp = (a,b,t)=>a+(b-a)*t;
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+
+  // ==== ÇİZİM ====
+  function drawSpine(){
+    cx.strokeStyle = CFG.color;
+    cx.lineWidth = CFG.spineWidth;
+    cx.beginPath();
+    for (let i=0;i<nodes.length-1;i++){
+      const a = nodes[i], b = nodes[i+1];
+      cx.moveTo(a.x, a.y);
+      cx.lineTo(b.x, b.y);
+    }
+    cx.stroke();
+  }
+
+  function drawRibsAndLegs(time){
+    cx.strokeStyle = CFG.color;
+    cx.lineWidth = 1;
+
+    for (let i=1;i<nodes.length-1;i++){
+      const a = nodes[i-1], b = nodes[i+1];
+      const n = nodes[i];
+
+      // omurganın normal vektörü (yana doğru)
+      const ang = Math.atan2(b.y - a.y, b.x - a.x) + Math.PI/2;
+
+      // kaburga (gövde çizgileri)
+      if (i % CFG.bodyRibEvery === 0){
+        cx.beginPath();
+        cx.moveTo(n.x - CFG.bodyRibLen*Math.cos(ang), n.y - CFG.bodyRibLen*Math.sin(ang));
+        cx.lineTo(n.x + CFG.bodyRibLen*Math.cos(ang), n.y + CFG.bodyRibLen*Math.sin(ang));
+        cx.stroke();
+      }
+
+      // bacaklar
+      if (i % CFG.legEvery === 0){
+        const wiggle = Math.sin(time*CFG.legWiggleFreq + i*0.6) * CFG.legWiggleAmp;
+        const L = CFG.legLen + wiggle;
+
+        cx.beginPath(); // sağ bacak
+        cx.moveTo(n.x, n.y);
+        cx.lineTo(n.x + L*Math.cos(ang), n.y + L*Math.sin(ang));
+        cx.stroke();
+
+        cx.beginPath(); // sol bacak
+        cx.moveTo(n.x, n.y);
+        cx.lineTo(n.x - L*Math.cos(ang), n.y - L*Math.sin(ang));
+        cx.stroke();
+
+        // uçlara minik pençe
+        const claw = 5;
+        cx.beginPath();
+        cx.moveTo(n.x + L*Math.cos(ang), n.y + L*Math.sin(ang));
+        cx.lineTo(n.x + (L+claw)*Math.cos(ang+0.35), n.y + (L+claw)*Math.sin(ang+0.35));
+        cx.moveTo(n.x + L*Math.cos(ang), n.y + L*Math.sin(ang));
+        cx.lineTo(n.x + (L+claw)*Math.cos(ang-0.35), n.y + (L+claw)*Math.sin(ang-0.35));
+        cx.stroke();
+      }
+    }
+  }
+
+  // ==== FİZİK / HAREKET ====
+  function stepPhysics(){
+    // başı mouse'a doğru yaklaştır (pürüzsüz takip)
+    const dx = mouse.x - head.x, dy = mouse.y - head.y;
+    const d = Math.hypot(dx,dy);
+    if (d > 0.001){
+      const k = Math.min(CFG.headFollow, d);
+      head.x += (dx / d) * k;
+      head.y += (dy / d) * k;
+    }
+    nodes[0].x = lerp(nodes[0].x, head.x, CFG.stiffness);
+    nodes[0].y = lerp(nodes[0].y, head.y, CFG.stiffness);
+
+    // her segmenti bir sonrakine bağla (sabit aralık/uzunluk)
+    for (let i=1;i<nodes.length;i++){
+      const a = nodes[i-1];
+      const b = nodes[i];
+      const vx = b.x - a.x, vy = b.y - a.y;
+      let dist = Math.hypot(vx, vy) || 0.0001;
+      const want = CFG.baseStep;
+      // b'yi a etrafında olması gereken halkaya taşı
+      const nx = vx / dist, ny = vy / dist;
+      b.x = a.x + nx * want;
+      b.y = a.y + ny * want;
+    }
+  }
+
+  // ==== ANA DÖNGÜ ====
+  const hud = document.getElementById("hud");
+  let last = performance.now(), fpsAcc=0, fpsCnt=0, fps=0;
+
+  function frame(now){
+    const dt = (now - last) / 1000; last = now;
+    // izli fade arka plan
+    cx.fillStyle = `rgba(11,15,20,${CFG.fadeTrail})`;
+    cx.fillRect(0,0,cv.width,cv.height);
+
+    stepPhysics();
+    drawSpine();
+    drawRibsAndLegs(now/1000);
+
+    // FPS göstergesi
+    fpsAcc += dt; fpsCnt++;
+    if (fpsAcc >= 0.5){ fps = Math.round(fpsCnt/fpsAcc); fpsAcc=0; fpsCnt=0; }
+    hud.textContent = `FPS: ${fps} | nodes:${CFG.nodes} step:${CFG.baseStep} legs:${CFG.legEvery}/${CFG.legLen}`;
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // Başlangıçta hafifçe kıpırdasın
+  setInterval(()=>{ mouse.x += Math.sin(performance.now()*0.002)*0.1; }, 30);
+})();
+</script>
+</body>
+</html>
